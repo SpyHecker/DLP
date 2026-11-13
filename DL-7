@@ -1,0 +1,107 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+print("TensorFlow Version:", tf.__version__)
+
+# Load training and testing CSV files
+train_df = pd.read_csv('sign_mnist_train.csv')
+test_df = pd.read_csv('sign_mnist_test.csv')
+
+# Separate target labels and pixel features
+y_train = train_df['label'].values
+X_train = train_df.drop('label', axis=1).values
+
+y_test = test_df['label'].values
+X_test = test_df.drop('label', axis=1).values
+
+# Normalize pixel values to [0, 1] and reshape to (num_samples, 28, 28, 1) for Conv2D
+X_train = (X_train.astype('float32') / 255.0).reshape(-1, 28, 28, 1)
+X_test = (X_test.astype('float32') / 255.0).reshape(-1, 28, 28, 1)
+
+print(f"Training set shape: {X_train.shape}")
+print(f"Testing set shape:  {X_test.shape}")
+
+model = models.Sequential([
+    # 1st Convolution & MaxPooling Block
+    layers.Conv2D(32, (3, 3), activation='relu', padding='same', input_shape=(28, 28, 1)),
+    layers.MaxPooling2D((2, 2)),
+    
+    # 2nd Convolution & MaxPooling Block
+    layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
+    layers.MaxPooling2D((2, 2)),
+    
+    # 3rd Convolution & MaxPooling Block
+    layers.Conv2D(128, (3, 3), activation='relu', padding='same'),
+    layers.MaxPooling2D((2, 2)),
+    
+    # Flatten and Dense Layers
+    layers.Flatten(),
+    layers.Dense(128, activation='relu'),
+    layers.Dropout(0.3),
+    layers.Dense(25, activation='softmax')  # 25 units for labels 0-24 (J=9 skipped)
+])
+
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+history = model.fit(
+    X_train, y_train,
+    epochs=15,
+    batch_size=64,
+    validation_split=0.2,
+    verbose=1
+)
+
+# Evaluate on the test dataset
+test_loss, test_accuracy = model.evaluate(X_test, y_test, verbose=0)
+print(f"\nTest Loss:     {test_loss:.4f}")
+print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
+
+# Map numeric class index (0-24) to English alphabet letters
+alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+# Select 5 random test images
+np.random.seed(42)
+sample_indices = np.random.choice(len(X_test), size=5, replace=False)
+
+sample_images = X_test[sample_indices]
+sample_actual = y_test[sample_indices]
+
+# Predict class probabilities and extract predicted class indices
+pred_probs = model.predict(sample_images, verbose=0)
+sample_preds = np.argmax(pred_probs, axis=1)
+sample_conf = np.max(pred_probs, axis=1) * 100
+
+# Visualize the 5 test images with Actual and Predicted Alphabet Labels
+plt.figure(figsize=(15, 3.5))
+for i in range(5):
+    plt.subplot(1, 5, i + 1)
+    plt.imshow(sample_images[i].squeeze(), cmap='gray')
+    
+    actual_letter = alphabet[sample_actual[i]]
+    pred_letter = alphabet[sample_preds[i]]
+    
+    title_color = 'green' if actual_letter == pred_letter else 'red'
+    plt.title(f"TestIdx: {sample_indices[i]}\nActual: {actual_letter} | Pred: {pred_letter}\n({sample_conf[i]:.1f}%)",
+              color=title_color, fontweight='bold')
+    plt.axis('off')
+
+plt.tight_layout()
+plt.show()
+
+# Print formatted summary table
+print("\nPredicted Alphabet Labels for 5 Test Images:")
+print("-" * 52)
+for i in range(5):
+    actual_letter = alphabet[sample_actual[i]]
+    pred_letter = alphabet[sample_preds[i]]
+    status = "Correct" if actual_letter == pred_letter else "Incorrect"
+    print(f"Image {i+1} (Idx {sample_indices[i]:4d}) -> Actual: {actual_letter} | Predicted: {pred_letter} ({sample_conf[i]:.1f}%) [{status}]")
