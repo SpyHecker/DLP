@@ -1,0 +1,94 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+print("TensorFlow Version:", tf.__version__)
+
+# Load training and testing datasets
+train_df = pd.read_csv('sign_mnist_train.csv')
+test_df = pd.read_csv('sign_mnist_test.csv')
+
+# Separate target labels and grayscale pixel features
+y_train = train_df['label'].values
+X_train = train_df.drop('label', axis=1).values
+
+y_test = test_df['label'].values
+X_test = test_df.drop('label', axis=1).values
+
+# Normalize pixel values to [0, 1] and reshape to 28x28 grayscale images
+X_train = (X_train.astype('float32') / 255.0).reshape(-1, 28, 28)
+X_test = (X_test.astype('float32') / 255.0).reshape(-1, 28, 28)
+
+print(f"Training set shape: {X_train.shape}")
+print(f"Testing set shape:  {X_test.shape}")
+
+model = models.Sequential([
+    layers.Flatten(input_shape=(28, 28)),
+    layers.Dense(512, activation='relu'),
+    layers.Dropout(0.2),
+    layers.Dense(256, activation='relu'),
+    layers.Dropout(0.2),
+    layers.Dense(128, activation='relu'),
+    layers.Dense(25, activation='softmax')  # 25 units for labels 0-24 (J=9 skipped)
+])
+
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+history = model.fit(
+    X_train, y_train,
+    epochs=20,
+    batch_size=64,
+    validation_split=0.2,
+    verbose=1
+)
+
+test_loss, test_accuracy = model.evaluate(X_test, y_test, verbose=0)
+print(f"\nTest Accuracy: {test_accuracy * 100:.2f}% | Test Loss: {test_loss:.4f}")
+
+# Map numeric index (0-24) to English alphabet letters
+alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+# Randomly select 5 indices from the test dataset
+np.random.seed(42)
+sample_indices = np.random.choice(len(X_test), size=5, replace=False)
+
+# Predict probabilities and extract predicted class indices
+sample_images = X_test[sample_indices]
+sample_actual = y_test[sample_indices]
+pred_probs = model.predict(sample_images, verbose=0)
+sample_preds = np.argmax(pred_probs, axis=1)
+
+# Plot the 5 test images with Actual vs. Predicted alphabet labels
+plt.figure(figsize=(15, 3.5))
+for i in range(5):
+    plt.subplot(1, 5, i + 1)
+    plt.imshow(sample_images[i], cmap='gray')
+    
+    actual_letter = alphabet[sample_actual[i]]
+    pred_letter = alphabet[sample_preds[i]]
+    
+    # Color title green if correct, red if misclassified
+    title_color = 'green' if actual_letter == pred_letter else 'red'
+    plt.title(f"TestIdx: {sample_indices[i]}\nActual: {actual_letter} | Pred: {pred_letter}", 
+              color=title_color, fontweight='bold')
+    plt.axis('off')
+
+plt.tight_layout()
+plt.show()
+
+# Also print a clean summary table in the console
+print("\nSample Predictions Summary:")
+print("-" * 45)
+for i in range(5):
+    actual_letter = alphabet[sample_actual[i]]
+    pred_letter = alphabet[sample_preds[i]]
+    status = "Correct" if actual_letter == pred_letter else "Incorrect"
+    print(f"Image {i+1} (Idx {sample_indices[i]:4d}) -> Actual: {actual_letter} | Predicted: {pred_letter} [{status}]")
