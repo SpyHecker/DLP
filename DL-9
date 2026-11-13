@@ -1,0 +1,106 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+print("TensorFlow Version:", tf.__version__)
+
+# Load training and testing datasets
+train_df = pd.read_csv('sign_mnist_train.csv')
+test_df = pd.read_csv('sign_mnist_test.csv')
+
+# Separate target labels and pixel features
+y_train = train_df['label'].values
+X_train = train_df.drop('label', axis=1).values
+
+y_test = test_df['label'].values
+X_test = test_df.drop('label', axis=1).values
+
+# Normalize pixel values to [0, 1] and reshape to (num_samples, 28, 28, 1)
+X_train = (X_train.astype('float32') / 255.0).reshape(-1, 28, 28, 1)
+X_test = (X_test.astype('float32') / 255.0).reshape(-1, 28, 28, 1)
+
+print(f"Training set shape: {X_train.shape}")
+print(f"Testing set shape:  {X_test.shape}")
+
+model = models.Sequential([
+    # 1st Convolution & Pooling Block
+    layers.Conv2D(32, (3, 3), activation='relu', padding='same', input_shape=(28, 28, 1)),
+    layers.MaxPooling2D((2, 2)),
+    
+    # 2nd Convolution & Pooling Block
+    layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
+    layers.MaxPooling2D((2, 2)),
+    
+    # 3rd Convolution & Pooling Block
+    layers.Conv2D(128, (3, 3), activation='relu', padding='same'),
+    layers.MaxPooling2D((2, 2)),
+    
+    # Flatten and Dense Classification Head
+    layers.Flatten(),
+    layers.Dense(128, activation='relu'),
+    layers.Dropout(0.3),
+    layers.Dense(25, activation='softmax')  # 25 units for labels 0-24 (J=9 skipped)
+])
+
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+history = model.fit(
+    X_train, y_train,
+    epochs=15,
+    batch_size=64,
+    validation_split=0.2,
+    verbose=1
+)
+
+test_loss, test_accuracy = model.evaluate(X_test, y_test, verbose=0)
+print(f"\nTest Loss:     {test_loss:.4f}")
+print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
+
+# Map numeric index (0-24) to English alphabet letters
+alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+# Predict alphabet labels across the entire test dataset
+y_test_pred_probs = model.predict(X_test, verbose=0)
+y_test_preds = np.argmax(y_test_pred_probs, axis=1)
+
+# Select 5 random test samples
+np.random.seed(42)
+sample_indices = np.random.choice(len(X_test), size=5, replace=False)
+
+# Visualize the 5 test samples with Actual and Predicted Alphabet Labels
+plt.figure(figsize=(15, 3.5))
+for i, idx in enumerate(sample_indices):
+    plt.subplot(1, 5, i + 1)
+    plt.imshow(X_test[idx].squeeze(), cmap='gray')
+    
+    actual_letter = alphabet[y_test[idx]]
+    pred_letter = alphabet[y_test_preds[idx]]
+    
+    title_color = 'green' if actual_letter == pred_letter else 'red'
+    plt.title(f"Sample {i+1} (Idx: {idx})\nActual: {actual_letter} | Predicted: {pred_letter}",
+              color=title_color, fontweight='bold')
+    plt.axis('off')
+
+plt.tight_layout()
+plt.show()
+
+# Display formatted table of Actual vs. Predicted Alphabet for the 5 samples
+results_df = pd.DataFrame({
+    'Test Sample Index': sample_indices,
+    'Actual Class ID': y_test[sample_indices],
+    'Actual Alphabet': [alphabet[y_test[idx]] for idx in sample_indices],
+    'Predicted Class ID': y_test_preds[sample_indices],
+    'Predicted Alphabet': [alphabet[y_test_preds[idx]] for idx in sample_indices],
+    'Match Status': ['Correct' if y_test[idx] == y_test_preds[idx] else 'Incorrect' for idx in sample_indices]
+})
+
+print("\nActual vs. Predicted Alphabet Labels for 5 Test Samples:")
+display(results_df)
