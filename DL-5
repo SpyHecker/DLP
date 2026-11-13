@@ -1,0 +1,112 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from sklearn.metrics import confusion_matrix, classification_report
+
+print("TensorFlow Version:", tf.__version__)
+
+# Load training and testing CSV files
+train_df = pd.read_csv('sign_mnist_train.csv')
+test_df = pd.read_csv('sign_mnist_test.csv')
+
+# Separate target labels and pixel features
+y_train = train_df['label'].values
+X_train = train_df.drop('label', axis=1).values
+
+y_test = test_df['label'].values
+X_test = test_df.drop('label', axis=1).values
+
+# Normalize pixel values to [0, 1] and reshape to 28x28 grayscale images
+X_train = (X_train.astype('float32') / 255.0).reshape(-1, 28, 28)
+X_test = (X_test.astype('float32') / 255.0).reshape(-1, 28, 28)
+
+print(f"Training set shape: {X_train.shape}")
+print(f"Testing set shape:  {X_test.shape}")
+
+model = models.Sequential([
+    layers.Flatten(input_shape=(28, 28)),
+    layers.Dense(512, activation='relu'),
+    layers.Dropout(0.2),
+    layers.Dense(256, activation='relu'),
+    layers.Dropout(0.2),
+    layers.Dense(128, activation='relu'),
+    layers.Dense(25, activation='softmax')  # 25 units for labels 0-24 (J=9 skipped)
+])
+
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+history = model.fit(
+    X_train, y_train,
+    epochs=20,
+    batch_size=64,
+    validation_split=0.2,
+    verbose=1
+)
+
+test_loss, test_accuracy = model.evaluate(X_test, y_test, verbose=0)
+print(f"\nTest Loss:     {test_loss:.4f}")
+print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
+
+# Predict class labels on the test dataset
+y_pred_probs = model.predict(X_test, verbose=0)
+y_pred = np.argmax(y_pred_probs, axis=1)
+
+# Valid class indices in Sign Language MNIST (0-24, excluding 9 for 'J')
+alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+valid_indices = sorted(np.unique(y_test))
+class_names = [alphabet[i] for i in valid_indices]
+
+# Compute the 24x24 confusion matrix
+cm = confusion_matrix(y_test, y_pred, labels=valid_indices)
+
+# Plot Confusion Matrix Heatmap
+plt.figure(figsize=(14, 11))
+sns.heatmap(
+    cm, annot=True, fmt='d', cmap='Blues',
+    xticklabels=class_names, yticklabels=class_names
+)
+plt.title('Confusion Matrix for ASL Alphabet Classification (FNN)', fontsize=14, fontweight='bold')
+plt.xlabel('Predicted Alphabet Label', fontsize=12)
+plt.ylabel('Actual Alphabet Label', fontsize=12)
+plt.tight_layout()
+plt.show()
+
+# Calculate total correct and incorrect predictions
+correct_total = np.trace(cm)
+incorrect_total = np.sum(cm) - correct_total
+
+print(f"Total Test Samples:           {len(y_test)}")
+print(f"Correctly Classified Samples: {correct_total} ({correct_total / len(y_test) * 100:.2f}%)")
+print(f"Misclassified Samples:        {incorrect_total} ({incorrect_total / len(y_test) * 100:.2f}%)\n")
+
+# Create a summary DataFrame showing Correct vs. Incorrect counts per ASL letter
+summary_rows = []
+for idx, letter in enumerate(class_names):
+    total_samples = np.sum(cm[idx, :])
+    correct_count = cm[idx, idx]
+    incorrect_count = total_samples - correct_count
+    acc_pct = (correct_count / total_samples) * 100 if total_samples > 0 else 0
+    summary_rows.append({
+        'Alphabet': letter,
+        'Total Test Images': total_samples,
+        'Correctly Classified': correct_count,
+        'Incorrectly Classified': incorrect_count,
+        'Class Accuracy (%)': round(acc_pct, 2)
+    })
+
+summary_df = pd.DataFrame(summary_rows)
+print("Per-Alphabet Classification Breakdown:")
+display(summary_df)
+
+# Print full scikit-learn classification report
+print("\nDetailed Classification Report:")
+print(classification_report(y_test, y_pred, labels=valid_indices, target_names=class_names))
