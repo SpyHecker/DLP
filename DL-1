@@ -1,0 +1,112 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+print("TensorFlow Version:", tf.__version__)
+
+# Load training and testing CSV files
+train_df = pd.read_csv('sign_mnist_train.csv')
+test_df = pd.read_csv('sign_mnist_test.csv')
+
+print(f"Training dataset shape: {train_df.shape}")
+print(f"Testing dataset shape:  {test_df.shape}")
+train_df.head()
+
+# Separate target labels and pixel values
+y_train = train_df['label'].values
+X_train = train_df.drop('label', axis=1).values
+
+y_test = test_df['label'].values
+X_test = test_df.drop('label', axis=1).values
+
+# Normalize pixel values from [0, 255] to [0, 1]
+X_train = X_train.astype('float32') / 255.0
+X_test = X_test.astype('float32') / 255.0
+
+# Reshape flat 784-pixel vectors into 28x28 grayscale images
+X_train = X_train.reshape(-1, 28, 28)
+X_test = X_test.reshape(-1, 28, 28)
+
+print(f"X_train shape: {X_train.shape}, y_train shape: {y_train.shape}")
+print(f"X_test shape:  {X_test.shape}, y_test shape:  {y_test.shape}")
+
+# Map numeric label (0-24) to corresponding English alphabet letter
+alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+plt.figure(figsize=(10, 4))
+for i in range(10):
+    plt.subplot(2, 5, i + 1)
+    plt.imshow(X_train[i], cmap='gray')
+    plt.title(f"Label: {alphabet[y_train[i]]} ({y_train[i]})")
+    plt.axis('off')
+plt.tight_layout()
+plt.show()
+
+model = models.Sequential([
+    layers.Flatten(input_shape=(28, 28)),
+    layers.Dense(512, activation='relu'),
+    layers.Dropout(0.2),
+    layers.Dense(256, activation='relu'),
+    layers.Dropout(0.2),
+    layers.Dense(128, activation='relu'),
+    layers.Dense(25, activation='softmax')
+])
+
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+history = model.fit(
+    X_train, y_train,
+    epochs=20,
+    batch_size=64,
+    validation_split=0.2,
+    verbose=1
+)
+
+test_loss, test_accuracy = model.evaluate(X_test, y_test, verbose=0)
+print(f"Test Loss:     {test_loss:.4f}")
+print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
+
+# Plot Accuracy and Loss curves
+plt.figure(figsize=(12, 4))
+
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label='Train Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+plt.title('Model Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label='Train Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.title('Model Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+
+plt.tight_layout()
+plt.show()
+
+# Predict on first 5 test images
+predictions = np.argmax(model.predict(X_test[:5], verbose=0), axis=1)
+
+plt.figure(figsize=(12, 3))
+for i in range(5):
+    plt.subplot(1, 5, i + 1)
+    plt.imshow(X_test[i], cmap='gray')
+    actual_char = alphabet[y_test[i]]
+    pred_char = alphabet[predictions[i]]
+    color = 'green' if actual_char == pred_char else 'red'
+    plt.title(f"Actual: {actual_char}\nPred: {pred_char}", color=color)
+    plt.axis('off')
+plt.tight_layout()
+plt.show()
