@@ -1,0 +1,118 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+print("TensorFlow Version:", tf.__version__)
+
+# Load training and testing CSV files
+train_df = pd.read_csv('sign_mnist_train.csv')
+test_df = pd.read_csv('sign_mnist_test.csv')
+
+# Separate target labels and pixel features
+y_train = train_df['label'].values
+X_train = train_df.drop('label', axis=1).values
+
+y_test = test_df['label'].values
+X_test = test_df.drop('label', axis=1).values
+
+# Normalize pixel values to [0, 1] and reshape to 28x28 grayscale images
+X_train = (X_train.astype('float32') / 255.0).reshape(-1, 28, 28)
+X_test = (X_test.astype('float32') / 255.0).reshape(-1, 28, 28)
+
+print(f"Training set shape: {X_train.shape}")
+print(f"Testing set shape:  {X_test.shape}")
+
+model = models.Sequential([
+    layers.Flatten(input_shape=(28, 28)),
+    
+    # Hidden Dense Layer 1
+    layers.Dense(512, activation='relu', name='Hidden_Layer_1'),
+    layers.Dropout(0.2),
+    
+    # Hidden Dense Layer 2
+    layers.Dense(256, activation='relu', name='Hidden_Layer_2'),
+    layers.Dropout(0.2),
+    
+    # Output Layer
+    layers.Dense(25, activation='softmax', name='Output_Layer')
+])
+
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+history = model.fit(
+    X_train, y_train,
+    epochs=20,
+    batch_size=64,
+    validation_split=0.2,
+    verbose=1
+)
+
+# Evaluate on training and testing sets
+train_loss, train_acc = model.evaluate(X_train, y_train, verbose=0)
+test_loss, test_acc = model.evaluate(X_test, y_test, verbose=0)
+
+print(f"Training Accuracy: {train_acc * 100:.2f}% | Training Loss: {train_loss:.4f}")
+print(f"Testing Accuracy:  {test_acc * 100:.2f}% | Testing Loss:  {test_loss:.4f}")
+
+# Plot Accuracy and Loss curves
+plt.figure(figsize=(12, 4.5))
+
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label='Train Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+plt.title('Model Accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label='Train Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.title('Model Loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend()
+
+plt.tight_layout()
+plt.show()
+
+alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+# Select 5 random sample images from the test set
+np.random.seed(42)
+sample_indices = np.random.choice(len(X_test), size=5, replace=False)
+
+sample_images = X_test[sample_indices]
+sample_actual = y_test[sample_indices]
+
+# Predict class probabilities and confidence scores
+pred_probs = model.predict(sample_images, verbose=0)
+sample_preds = np.argmax(pred_probs, axis=1)
+sample_conf = np.max(pred_probs, axis=1) * 100
+
+plt.figure(figsize=(15, 3.5))
+for i in range(5):
+    plt.subplot(1, 5, i + 1)
+    plt.imshow(sample_images[i], cmap='gray')
+    
+    actual_char = alphabet[sample_actual[i]]
+    pred_char = alphabet[sample_preds[i]]
+    conf = sample_conf[i]
+    
+    color = 'green' if actual_char == pred_char else 'red'
+    plt.title(f"Actual: {actual_char} | Pred: {pred_char}\nConf: {conf:.1f}%", 
+              color=color, fontweight='bold')
+    plt.axis('off')
+
+plt.tight_layout()
+plt.show()
