@@ -1,0 +1,97 @@
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+print("TensorFlow Version:", tf.__version__)
+
+if os.path.exists('mnist_train.csv') and os.path.exists('mnist_test.csv'):
+    train_df = pd.read_csv('mnist_train.csv')
+    test_df = pd.read_csv('mnist_test.csv')
+    y_train = train_df.iloc[:, 0].values
+    X_train = train_df.iloc[:, 1:].values
+    y_test = test_df.iloc[:, 0].values
+    X_test = test_df.iloc[:, 1:].values
+else:
+    (X_train, y_train), (X_test, y_test) = tf.keras.datasets.mnist.load_data()
+
+# Normalize pixel values to [0, 1] and reshape to (num_samples, 28, 28, 1)
+X_train = (X_train.astype('float32') / 255.0).reshape(-1, 28, 28, 1)
+X_test = (X_test.astype('float32') / 255.0).reshape(-1, 28, 28, 1)
+
+print(f"Training set shape: {X_train.shape} | Labels shape: {y_train.shape}")
+print(f"Testing set shape:  {X_test.shape}  | Labels shape: {y_test.shape}")
+
+model = models.Sequential([
+    # 1st Convolution & Max-Pooling Block
+    layers.Conv2D(32, (3, 3), activation='relu', padding='same', input_shape=(28, 28, 1)),
+    layers.MaxPooling2D((2, 2)),
+    
+    # 2nd Convolution & Max-Pooling Block
+    layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
+    layers.MaxPooling2D((2, 2)),
+    
+    # Flatten and Dense Classification Head
+    layers.Flatten(),
+    layers.Dense(128, activation='relu'),
+    layers.Dropout(0.3),
+    layers.Dense(10, activation='softmax')  # 10 digit classes (0-9)
+])
+
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+history = model.fit(
+    X_train, y_train,
+    epochs=10,
+    batch_size=64,
+    validation_split=0.2,
+    verbose=1
+)
+
+test_loss, test_accuracy = model.evaluate(X_test, y_test, verbose=0)
+print(f"Test Loss:        {test_loss:.4f}")
+print(f"Testing Accuracy: {test_accuracy * 100:.2f}%")
+
+# Plot Accuracy and Loss curves
+plt.figure(figsize=(12, 4))
+
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label='Train Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+plt.title('MNIST CNN Accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label='Train Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.title('MNIST CNN Loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend()
+
+plt.tight_layout()
+plt.show()
+
+# Visualize 5 sample digit predictions
+preds = np.argmax(model.predict(X_test[:5], verbose=0), axis=1)
+plt.figure(figsize=(12, 2.8))
+for i in range(5):
+    plt.subplot(1, 5, i + 1)
+    plt.imshow(X_test[i].squeeze(), cmap='gray')
+    color = 'green' if y_test[i] == preds[i] else 'red'
+    plt.title(f"Actual: {y_test[i]} | Pred: {preds[i]}", color=color, fontweight='bold')
+    plt.axis('off')
+plt.tight_layout()
+plt.show()
