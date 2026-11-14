@@ -1,0 +1,140 @@
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+print("TensorFlow Version:", tf.__version__)
+
+# Automatically load from local CSV if present in offline lab, otherwise use Keras built-in loader
+if os.path.exists('mnist_train.csv') and os.path.exists('mnist_test.csv'):
+    train_df = pd.read_csv('mnist_train.csv')
+    test_df = pd.read_csv('mnist_test.csv')
+    y_train = train_df.iloc[:, 0].values
+    X_train = train_df.iloc[:, 1:].values.reshape(-1, 28, 28)
+    y_test = test_df.iloc[:, 0].values
+    X_test = test_df.iloc[:, 1:].values.reshape(-1, 28, 28)
+else:
+    (X_train, y_train), (X_test, y_test) = tf.keras.datasets.mnist.load_data()
+
+# Normalize pixel values from [0, 255] to [0, 1]
+X_train = X_train.astype('float32') / 255.0
+X_test = X_test.astype('float32') / 255.0
+
+print(f"Training set shape: {X_train.shape} | Labels shape: {y_train.shape}")
+print(f"Testing set shape:  {X_test.shape}  | Labels shape: {y_test.shape}")
+
+model_2hidden = models.Sequential([
+    layers.Flatten(input_shape=(28, 28)),
+    
+    # Hidden Dense Layer 1
+    layers.Dense(256, activation='relu', name='Hidden_Layer_1'),
+    layers.Dropout(0.2),
+    
+    # Hidden Dense Layer 2
+    layers.Dense(128, activation='relu', name='Hidden_Layer_2'),
+    layers.Dropout(0.2),
+    
+    # Output Layer (10 digit classes: 0-9)
+    layers.Dense(10, activation='softmax', name='Output_Layer')
+], name='FNN_2_Hidden_Layers')
+
+model_2hidden.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model_2hidden.summary()
+
+# Train the 2-Hidden-Layer FNN
+history_2 = model_2hidden.fit(
+    X_train, y_train,
+    epochs=10,
+    batch_size=64,
+    validation_split=0.2,
+    verbose=1
+)
+
+loss_2, acc_2 = model_2hidden.evaluate(X_test, y_test, verbose=0)
+print(f"\n[2 Hidden Layers] Test Loss: {loss_2:.4f} | Test Accuracy: {acc_2 * 100:.2f}%")
+
+# 1. Build & Train Model with 0 Hidden Layers (Linear Baseline)
+model_0hidden = models.Sequential([
+    layers.Flatten(input_shape=(28, 28)),
+    layers.Dense(10, activation='softmax')
+], name='FNN_0_Hidden_Layers')
+
+model_0hidden.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+history_0 = model_0hidden.fit(X_train, y_train, epochs=10, batch_size=64, validation_split=0.2, verbose=0)
+loss_0, acc_0 = model_0hidden.evaluate(X_test, y_test, verbose=0)
+
+# 2. Build & Train Model with 1 Hidden Layer
+model_1hidden = models.Sequential([
+    layers.Flatten(input_shape=(28, 28)),
+    layers.Dense(256, activation='relu'),
+    layers.Dropout(0.2),
+    layers.Dense(10, activation='softmax')
+], name='FNN_1_Hidden_Layer')
+
+model_1hidden.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+history_1 = model_1hidden.fit(X_train, y_train, epochs=10, batch_size=64, validation_split=0.2, verbose=0)
+loss_1, acc_1 = model_1hidden.evaluate(X_test, y_test, verbose=0)
+
+# Display Comparison Table
+comparison_df = pd.DataFrame({
+    'Architecture': ['0 Hidden Layers (Linear)', '1 Hidden Layer (256)', '2 Hidden Layers (256 -> 128)'],
+    'Train Accuracy (%)': [
+        round(history_0.history['accuracy'][-1] * 100, 2),
+        round(history_1.history['accuracy'][-1] * 100, 2),
+        round(history_2.history['accuracy'][-1] * 100, 2)
+    ],
+    'Validation Accuracy (%)': [
+        round(history_0.history['val_accuracy'][-1] * 100, 2),
+        round(history_1.history['val_accuracy'][-1] * 100, 2),
+        round(history_2.history['val_accuracy'][-1] * 100, 2)
+    ],
+    'Test Accuracy (%)': [
+        round(acc_0 * 100, 2),
+        round(acc_1 * 100, 2),
+        round(acc_2 * 100, 2)
+    ],
+    'Test Loss': [
+        round(loss_0, 4),
+        round(loss_1, 4),
+        round(loss_2, 4)
+    ]
+})
+
+print("Effect of Hidden Layers on Handwritten MNIST Performance:")
+display(comparison_df)
+
+epochs_range = range(1, 11)
+
+plt.figure(figsize=(12, 4.8))
+
+# Validation Accuracy Comparison
+plt.subplot(1, 2, 1)
+plt.plot(epochs_range, history_0.history['val_accuracy'], label='0 Hidden Layers', linestyle='--', marker='o')
+plt.plot(epochs_range, history_1.history['val_accuracy'], label='1 Hidden Layer (256)', linestyle='-.', marker='s')
+plt.plot(epochs_range, history_2.history['val_accuracy'], label='2 Hidden Layers (256->128)', linewidth=2, marker='^')
+plt.title('Effect of Hidden Layers on Validation Accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Validation Accuracy')
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend()
+
+# Validation Loss Comparison
+plt.subplot(1, 2, 2)
+plt.plot(epochs_range, history_0.history['val_loss'], label='0 Hidden Layers', linestyle='--', marker='o')
+plt.plot(epochs_range, history_1.history['val_loss'], label='1 Hidden Layer (256)', linestyle='-.', marker='s')
+plt.plot(epochs_range, history_2.history['val_loss'], label='2 Hidden Layers (256->128)', linewidth=2, marker='^')
+plt.title('Effect of Hidden Layers on Validation Loss')
+plt.xlabel('Epochs')
+plt.ylabel('Validation Loss')
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend()
+
+plt.tight_layout()
+plt.show()
