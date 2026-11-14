@@ -1,0 +1,91 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models, Input
+
+print("TensorFlow Version:", tf.__version__)
+
+# Load training and testing datasets
+train_df = pd.read_csv('sign_mnist_train.csv')
+test_df = pd.read_csv('sign_mnist_test.csv')
+
+# Separate target labels and grayscale pixel features
+y_train = train_df['label'].values
+X_train = train_df.drop('label', axis=1).values
+
+y_test = test_df['label'].values
+X_test = test_df.drop('label', axis=1).values
+
+# Normalize pixel values to [0, 1] and reshape to (num_samples, 28, 28, 1)
+X_train = (X_train.astype('float32') / 255.0).reshape(-1, 28, 28, 1)
+X_test = (X_test.astype('float32') / 255.0).reshape(-1, 28, 28, 1)
+
+print(f"Training set shape: {X_train.shape}")
+print(f"Testing set shape:  {X_test.shape}")
+
+inputs = Input(shape=(28, 28, 1), name='Grayscale_Input')
+
+# --- STAGE 1: FEATURE EXTRACTION (Convolution + Max-Pooling Layers) ---
+x = layers.Conv2D(32, (3, 3), activation='relu', padding='same', name='Conv_Block1')(inputs)
+x = layers.MaxPooling2D((2, 2), name='MaxPool_Block1')(x)
+
+x = layers.Conv2D(64, (3, 3), activation='relu', padding='same', name='Conv_Block2')(x)
+x = layers.MaxPooling2D((2, 2), name='MaxPool_Block2')(x)
+
+x = layers.Conv2D(128, (3, 3), activation='relu', padding='same', name='Conv_Block3')(x)
+feature_maps = layers.MaxPooling2D((2, 2), name='Extracted_Feature_Maps')(x)
+
+# --- STAGE 2: ALPHABET CLASSIFICATION (Flatten + Dense Layers) ---
+flat_features = layers.Flatten(name='Flatten_Extracted_Features')(feature_maps)
+dense_1 = layers.Dense(128, activation='relu', name='Classifier_Dense_1')(flat_features)
+drop = layers.Dropout(0.3, name='Classifier_Dropout')(dense_1)
+outputs = layers.Dense(25, activation='softmax', name='Alphabet_Output')(drop)
+
+# Construct full CNN model
+model = models.Model(inputs=inputs, outputs=outputs, name='CNN_FeatureExtractor_Classifier')
+
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+history = model.fit(
+    X_train, y_train,
+    epochs=15,
+    batch_size=64,
+    validation_split=0.2,
+    verbose=1
+)
+
+test_loss, test_accuracy = model.evaluate(X_test, y_test, verbose=0)
+print(f"Test Loss:     {test_loss:.4f}")
+print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
+
+# Build a sub-model that outputs intermediate feature maps from Conv_Block1 and MaxPool_Block1
+feature_extractor = models.Model(
+    inputs=model.input,
+    outputs=[model.get_layer('Conv_Block1').output, model.get_layer('Extracted_Feature_Maps').output]
+)
+
+# Pass the first test image through the feature extractor
+sample_img = X_test[0:1]
+conv1_features, final_pooled_features = feature_extractor.predict(sample_img, verbose=0)
+
+print(f"Original Image Shape:              {sample_img.shape}")
+print(f"Conv_Block1 Feature Maps Shape:    {conv1_features.shape}")
+print(f"Final Pooled Features Shape:       {final_pooled_features.shape}")
+
+# Visualize the first 8 extracted feature channels from Conv_Block1
+plt.figure(figsize=(12, 3.5))
+plt.suptitle('Extracted Spatial Feature Maps (Conv_Block1 Filters 1-8)', fontsize=13, fontweight='bold')
+for i in range(8):
+    plt.subplot(1, 8, i + 1)
+    plt.imshow(conv1_features[0, :, :, i], cmap='viridis')
+    plt.title(f"Filter {i+1}")
+    plt.axis('off')
+plt.tight_layout()
+plt.show()
