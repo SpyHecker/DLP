@@ -1,0 +1,178 @@
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import accuracy_score, precision_score, recall_score, confusion_matrix, classification_report
+
+print("TensorFlow Version:", tf.__version__)
+
+# Load ECG dataset from local file if available, otherwise download from Google Cloud storage
+if os.path.exists('ecg.csv'):
+    df = pd.read_csv('ecg.csv', header=None)
+else:
+    url = 'http://storage.googleapis.com/download.tensorflow.org/data/ecg.csv'
+    df = pd.read_csv(url, header=None)
+
+raw_data = df.values
+
+# Features: first 140 columns (ECG signal time steps) | Labels: last column (1 = Normal, 0 = Abnormal)
+X_data = raw_data[:, :-1]
+y_labels = raw_data[:, -1].astype(bool)  # True = Normal (1), False = Abnormal (0)
+
+# Split into Training (80%) and Testing (20%) sets
+X_train, X_test, y_train, y_test = train_test_split(
+    X_data, y_labels, test_size=0.2, random_state=42, stratify=y_labels
+)
+
+# Normalize ECG signals to the range [0, 1] using MinMaxScaler
+scaler = MinMaxScaler()
+X_train_scaled = scaler.fit_transform(X_train).astype('float32')
+X_test_scaled = scaler.transform(X_test).astype('float32')
+
+# Separate Normal (True) and Abnormal (False) ECG records
+normal_train_data = X_train_scaled[y_train]
+abnormal_train_data = X_train_scaled[~y_train]
+
+normal_test_data = X_test_scaled[y_test]
+abnormal_test_data = X_test_scaled[~y_test]
+
+input_dim = X_train_scaled.shape[1]  # 140 time steps
+print(f"Total ECG Records:          {len(df)} | Signal Length: {input_dim}")
+print(f"Normal Training Signals:    {normal_train_data.shape}")
+print(f"Abnormal Training Signals:  {abnormal_train_data.shape}")
+print(f"Normal Testing Signals:     {normal_test_data.shape}")
+print(f"Abnormal Testing Signals:   {abnormal_test_data.shape}")
+
+# (c) Encoder Network
+encoder = models.Sequential([
+    layers.Input(shape=(input_dim,), name='ECG_Input'),
+    layers.Dense(32, activation='relu', name='Encoder_Dense_1'),
+    layers.Dense(16, activation='relu', name='Encoder_Dense_2'),
+    layers.Dense(8, activation='relu', name='Latent_Space')
+], name='Encoder')
+
+# (d) Decoder Network
+decoder = models.Sequential([
+    layers.Input(shape=(8,), name='Latent_Input'),
+    layers.Dense(16, activation='relu', name='Decoder_Dense_1'),
+    layers.Dense(32, activation='relu', name='Decoder_Dense_2'),
+    layers.Dense(input_dim, activation='sigmoid', name='Reconstructed_ECG_Output')
+], name='Decoder')
+
+# Combine Encoder and Decoder into the full Autoencoder
+autoencoder = models.Sequential([encoder, decoder], name='ECG_Anomaly_Autoencoder')
+
+# (e) Compile Autoencoder using Adam optimizer, MSE loss, and MAE metric
+autoencoder.compile(
+    optimizer='adam',
+    loss='mse',
+    metrics=['mae']
+)
+
+encoder.summary()
+decoder.summary()
+autoencoder.summary()
+
+# (f) Train Autoencoder ONLY on normal_train_data so it learns to reconstruct normal ECG patterns
+history = autoencoder.fit(
+    normal_train_data, normal_train_data,
+    epochs=25,
+    batch_size=64,
+    validation_data=(X_test_scaled, X_test_scaled),
+    shuffle=True,
+    verbose=1
+)
+
+# Plot Training vs. Validation Loss
+plt.figure(figsize=(8, 4))
+plt.plot(history.history['loss'], label='Training Loss (Normal ECGs)', linewidth=2)
+plt.plot(history.history['val_loss'], label='Validation Loss (All Test ECGs)', linewidth=2)
+plt.title('Autoencoder Reconstruction Loss (MSE)')
+plt.xlabel('Epochs')
+plt.ylabel('MSE Loss')
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# Compute reconstruction error (MAE per sample) on normal training signals
+reconstructions_train = autoencoder.predict(normal_train_data, verbose=0)
+train_loss = tf.keras.losses.mae(reconstructions_train, normal_train_data).numpy()
+
+# Set threshold as Mean + 1 Standard Deviation of normal training reconstruction error
+threshold = np.mean(train_loss) + np.std(train_loss)
+print(f"Calculated Reconstruction Error Threshold: {threshold:.4f}")
+
+# Compute reconstruction errors for all test ECG signals
+reconstructions_test = autoencoder.predict(X_test_scaled, verbose=0)
+test_loss = tf.keras.losses.mae(reconstructions_test, X_test_scaled).numpy()
+
+# Classify test signals: Error < threshold -> Normal (True/1), Error >= threshold -> Abnormal/Anomaly (False/0)
+predicted_normal = test_loss < threshold
+
+print(f"\nAnomaly Detection Accuracy:  {accuracy_score(y_test, predicted_normal) * 100:.2f}%")
+print(f"Precision (Normal):          {precision_score(y_test, predicted_normal) * 100:.2f}%")
+print(f"Recall    (Normal):          {recall_score(y_test, predicted_normal) * 100:.2f}%\n")
+print(classification_report(y_test, predicted_normal, target_names=['Abnormal (Anomaly)', 'Normal']))
+
+# 1. Plot Original vs. Reconstructed ECG Signal for a Normal and an Abnormal Test Sample
+normal_recon = autoencoder.predict(normal_test_data[:1], verbose=0)[0]
+abnormal_recon = autoencoder.predict(abnormal_test_data[:1], verbose=0)[0]
+
+plt.figure(figsize=(14, 4.5))
+
+# Normal ECG Plot
+plt.subplot(1, 2, 1)
+plt.plot(normal_test_data[0], 'b', label='Original Normal ECG')
+plt.plot(normal_recon, 'r', linestyle='--', label='Reconstructed ECG')
+plt.fill_between(np.arange(input_dim), normal_recon, normal_test_data[0], color='lightcoral', alpha=0.4, label='Reconstruction Error')
+plt.title('Normal ECG: Low Reconstruction Error')
+plt.xlabel('Time Steps')
+plt.ylabel('Normalized Amplitude')
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.legend()
+
+# Abnormal ECG Plot
+plt.subplot(1, 2, 2)
+plt.plot(abnormal_test_data[0], 'b', label='Original Abnormal ECG')
+plt.plot(abnormal_recon, 'r', linestyle='--', label='Reconstructed ECG')
+plt.fill_between(np.arange(input_dim), abnormal_recon, abnormal_test_data[0], color='lightcoral', alpha=0.5, label='Reconstruction Error (Anomaly)')
+plt.title('Abnormal (Anomalous) ECG: High Reconstruction Error')
+plt.xlabel('Time Steps')
+plt.ylabel('Normalized Amplitude')
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.legend()
+
+plt.tight_layout()
+plt.show()
+
+# 2. Plot Distribution of Reconstruction Errors vs. Threshold
+normal_test_errors = tf.keras.losses.mae(autoencoder.predict(normal_test_data, verbose=0), normal_test_data).numpy()
+abnormal_test_errors = tf.keras.losses.mae(autoencoder.predict(abnormal_test_data, verbose=0), abnormal_test_data).numpy()
+
+plt.figure(figsize=(9, 4.5))
+plt.hist(normal_test_errors, bins=40, alpha=0.7, color='tab:green', label='Normal Test ECGs')
+plt.hist(abnormal_test_errors, bins=40, alpha=0.7, color='tab:red', label='Abnormal Test ECGs (Anomalies)')
+plt.axvline(threshold, color='black', linestyle='--', linewidth=2, label=f'Threshold = {threshold:.4f}')
+plt.title('Distribution of Test Reconstruction Errors & Anomaly Threshold')
+plt.xlabel('Reconstruction Error (MAE)')
+plt.ylabel('Number of ECG Records')
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# 3. Display Sample Table Identifying Normal and Abnormal ECG Patterns
+sample_summary = pd.DataFrame({
+    'Test Sample Index': range(10),
+    'Reconstruction Error': np.round(test_loss[:10], 4),
+    'Threshold': round(threshold, 4),
+    'Actual ECG Pattern': ['Normal' if val else 'Abnormal' for val in y_test[:10]],
+    'Identified Pattern': ['Normal' if pred else 'Abnormal (Anomaly)' for pred in predicted_normal[:10]]
+})
+print("\nSample ECG Anomaly Detection Results:")
+display(sample_summary)
