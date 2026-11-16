@@ -1,0 +1,154 @@
+import os
+import string
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+# Set random seeds for reproducibility
+np.random.seed(42)
+tf.random.set_seed(42)
+
+print("TensorFlow Version:", tf.__version__)
+
+
+# (a) Load text corpus from datasets/document3.txt
+file_path = os.path.join("datasets", "document3.txt")
+if not os.path.exists(file_path):
+    file_path = "document3.txt"
+
+with open(file_path, "r", encoding="utf-8-sig") as f:
+    corpus = f.read()
+
+print(f"Successfully loaded document from: {file_path}")
+print(f"Corpus Length: {len(corpus)} characters\n")
+print("Corpus Preview (First 250 characters):")
+print(corpus[:250] + "...\n")
+
+# Convert text to lowercase, replace em/en dashes with spaces, and strip punctuation
+clean_text = corpus.lower().replace('–', ' ').replace('—', ' ').translate(str.maketrans('', '', string.punctuation))
+
+# Tokenize sentences into words
+tokens = clean_text.split()
+
+print("Cleaned & Tokenized Words (First 30):")
+print(tokens[:30])
+print(f"\nTotal Tokens in document3.txt: {len(tokens)}")
+
+
+# (b) Build vocabulary and word-to-index mappings
+vocab = sorted(list(set(tokens)))
+vocab_size = len(vocab)
+
+word_to_idx = {word: idx for idx, word in enumerate(vocab)}
+idx_to_word = {idx: word for idx, word in enumerate(vocab)}
+
+# Context window size: 2 words on left and 2 words on right (window_size = 2 -> 4 context words)
+window_size = 2
+context_length = 2 * window_size
+
+X_context = []
+y_target = []
+context_target_pairs = []
+
+for i in range(window_size, len(tokens) - window_size):
+    target_word = tokens[i]
+    context_words = [
+        tokens[i - j] for j in range(window_size, 0, -1)
+    ] + [
+        tokens[i + j] for j in range(1, window_size + 1)
+    ]
+    
+    context_target_pairs.append((context_words, target_word))
+    X_context.append([word_to_idx[w] for w in context_words])
+    y_target.append(word_to_idx[target_word])
+
+X_train = np.array(X_context)
+y_train = np.array(y_target)
+
+print(f"Vocabulary Size (Unique Words): {vocab_size}")
+print(f"Total Training Samples:         {len(X_train)}")
+print(f"X_train shape (samples, context_length): {X_train.shape}")
+print(f"y_train shape (samples,):                {y_train.shape}")
+
+
+embedding_dim = 32
+
+model = models.Sequential([
+    layers.Input(shape=(context_length,)),
+    layers.Embedding(input_dim=vocab_size, output_dim=embedding_dim, name='Word_Embedding'),
+    layers.GlobalAveragePooling1D(name='Average_Context_Embeddings'),
+    layers.Dense(64, activation='relu', name='Hidden_Dense'),
+    layers.Dense(vocab_size, activation='softmax', name='Target_Word_Output')
+], name='CBOW_Model')
+
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+# Train the CBOW model
+epochs = 200
+history = model.fit(
+    X_train, y_train,
+    epochs=epochs,
+    batch_size=16,
+    verbose=0
+)
+
+print(f"\nInitial Training Loss (Epoch 1):   {history.history['loss'][0]:.4f}")
+print(f"Final Training Loss (Epoch {epochs}):   {history.history['loss'][-1]:.4f}")
+print(f"Final Training Accuracy:           {history.history['accuracy'][-1] * 100:.2f}%")
+
+
+# 1. Display the Vocabulary (Word -> Index Mapping)
+print("=== 1. VOCABULARY (Sample of Word -> Unique Index) ===")
+vocab_df = pd.DataFrame(list(word_to_idx.items()), columns=['Word', 'Unique Index'])
+display(vocab_df.head(20).T)
+print(f"(Showing first 20 of {vocab_size} total vocabulary items)\n")
+
+# 2. Display Sample Context-Target Pairs
+print("=== 2. SAMPLE CONTEXT-TARGET PAIRS (First 10 Pairs) ===")
+pairs_df = pd.DataFrame([
+    {
+        'Context Words': ', '.join(ctx),
+        'Context Indices': [word_to_idx[w] for w in ctx],
+        'Target Word': tgt,
+        'Target Index': word_to_idx[tgt]
+    }
+    for ctx, tgt in context_target_pairs[:10]
+])
+display(pairs_df)
+
+# 3. Display Training Loss Curve
+plt.figure(figsize=(8, 4))
+plt.plot(history.history['loss'], color='tab:blue', linewidth=2, label='Training Loss')
+plt.title('CBOW Model Training Loss Across Epochs (document3.txt)')
+plt.xlabel('Epochs')
+plt.ylabel('Cross-Entropy Loss')
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# 4. Predict Target Word for Given Sets of Context Words from document3.txt
+print("\n=== 3. PREDICTED TARGET WORDS FOR GIVEN CONTEXT WORDS ===")
+test_contexts = [
+    (['speed', 'of', 'is', 'an'], "transmission"),      # from: 'the speed of transmission is an important'
+    (['the', 'serial', 'for', 'covid19'], "interval"),   # from: 'the serial interval for covid-19 virus'
+    (['influenza', 'can', 'faster', 'than'], "spread"),  # from: 'influenza can spread faster than covid-19'
+    (['the', 'two', 'influenza', 'has'], "viruses")      # from: 'the two viruses influenza has a shorter'
+]
+
+for ctx_words, expected in test_contexts:
+    ctx_indices = np.array([[word_to_idx[w] for w in ctx_words]])
+    pred_probs = model.predict(ctx_indices, verbose=0)
+    pred_idx = np.argmax(pred_probs, axis=1)[0]
+    confidence = np.max(pred_probs) * 100
+    pred_word = idx_to_word[pred_idx]
+    print(f"Context Words: {ctx_words}")
+    print(f"  --> Expected: '{expected}' | Predicted Target Word: '{pred_word}' (Confidence: {confidence:.1f}%)\n")
