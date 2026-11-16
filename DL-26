@@ -1,0 +1,177 @@
+import os
+import glob
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from tensorflow.keras.applications import VGG16
+from tensorflow.keras.applications.vgg16 import preprocess_input
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
+from tensorflow.keras.utils import to_categorical
+from sklearn.model_selection import train_test_split
+
+print("TensorFlow Version:", tf.__version__)
+
+DATASET_DIR = '101_ObjectCategories'
+
+# (a) Select suitable object categories from Caltech-101
+selected_categories = ['airplanes', 'Motorbikes', 'Faces', 'watch', 'sunflower']
+
+if os.path.exists(DATASET_DIR):
+    available_dirs = [d for d in sorted(os.listdir(DATASET_DIR)) 
+                      if os.path.isdir(os.path.join(DATASET_DIR, d)) and d != 'BACKGROUND_Google']
+    if not all(cat in available_dirs for cat in selected_categories):
+        selected_categories = available_dirs[:5]
+    print("Selected Object Categories:", selected_categories)
+    
+    images_raw, labels = [], []
+    for class_idx, category in enumerate(selected_categories):
+        cat_path = os.path.join(DATASET_DIR, category)
+        img_files = (glob.glob(os.path.join(cat_path, '*.jpg')) + 
+                     glob.glob(os.path.join(cat_path, '*.jpeg')) + 
+                     glob.glob(os.path.join(cat_path, '*.png')))
+        for img_path in img_files[:150]:
+            # (b) Resize image to 224 x 224 pixels
+            img = load_img(img_path, target_size=(224, 224))
+            images_raw.append(img_to_array(img))
+            labels.append(class_idx)
+            
+    images_raw = np.array(images_raw, dtype='float32')
+    labels = np.array(labels)
+else:
+    # Fallback: Load via tensorflow_datasets if local directory is not present
+    import tensorflow_datasets as tfds
+    ds, info = tfds.load('caltech101', split='train+test', with_info=True, as_supervised=True)
+    all_label_names = info.features['label'].names
+    target_indices = [i for i, name in enumerate(all_label_names) if name.lower() != 'background_google'][:5]
+    selected_categories = [all_label_names[i] for i in target_indices]
+    print("Selected Object Categories via TFDS:", selected_categories)
+    
+    images_raw, labels = [], []
+    for img, lbl in tfds.as_numpy(ds):
+        if lbl in target_indices:
+            img_resized = tf.image.resize(img, (224, 224)).numpy()
+            images_raw.append(img_resized)
+            labels.append(target_indices.index(lbl))
+    images_raw = np.array(images_raw, dtype='float32')
+    labels = np.array(labels)
+
+# Split into Training (80%) and Testing (20%) sets
+X_train_raw, X_test_raw, y_train_idx, y_test_idx = train_test_split(
+    images_raw, labels, test_size=0.2, random_state=42, stratify=labels
+)
+
+# (b) Apply VGG16 preprocessing
+X_train_img = preprocess_input(X_train_raw.copy())
+X_test_img = preprocess_input(X_test_raw.copy())
+
+num_classes = len(selected_categories)
+y_train = to_categorical(y_train_idx, num_classes=num_classes)
+y_test = to_categorical(y_test_idx, num_classes=num_classes)
+
+print(f"Preprocessed Train Images Shape: {X_train_img.shape}")
+print(f"Preprocessed Test Images Shape:  {X_test_img.shape}")
+
+# (c) Load ImageNet pre-trained VGG16 model without top classification layers
+# NOTE: For offline lab machines, replace weights='imagenet' with the local .h5 weights path if needed
+vgg_base = VGG16(
+    weights='imagenet',
+    include_top=False,
+    input_shape=(224, 224, 3)
+)
+
+# (d) Freeze all convolutional layers to use VGG16 as a fixed feature extractor
+vgg_base.trainable = False
+for layer in vgg_base.layers:
+    layer.trainable = False
+
+# (e) Build the Feature Extractor pipeline (VGG16 Conv Base + GlobalAveragePooling2D)
+feature_extractor = models.Sequential([
+    vgg_base,
+    layers.GlobalAveragePooling2D(name='GlobalAvgPool_Features')
+], name='VGG16_Fixed_Feature_Extractor')
+
+feature_extractor.summary()
+
+# Extract 512-dimensional feature vectors for training and testing images
+print("\nExtracting training and testing features using VGG16...")
+train_features = feature_extractor.predict(X_train_img, batch_size=32, verbose=1)
+test_features = feature_extractor.predict(X_test_img, batch_size=32, verbose=1)
+
+print(f"\nExtracted Training Features Shape: {train_features.shape}")
+print(f"Extracted Testing Features Shape:  {test_features.shape}")
+
+# (f) Build custom Dense classifier taking the 512-D extracted feature vector as input
+classifier = models.Sequential([
+    layers.Input(shape=(train_features.shape[1],), name='Extracted_Feature_Input'),
+    layers.Dense(256, activation='relu', name='Custom_Dense_Hidden'),
+    layers.Dropout(0.3, name='Custom_Dropout'),
+    layers.Dense(num_classes, activation='softmax', name='Softmax_Output')
+], name='Custom_Feature_Classifier')
+
+classifier.compile(
+    optimizer='adam',
+    loss='categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+classifier.summary()
+
+# (g) Train the custom classifier using the extracted training features
+history = classifier.fit(
+    train_features, y_train,
+    epochs=20,
+    batch_size=32,
+    validation_split=0.2,
+    verbose=1
+)
+
+# (h) Evaluate the classifier using extracted test features
+train_loss, train_accuracy = classifier.evaluate(train_features, y_train, verbose=0)
+test_loss, test_accuracy = classifier.evaluate(test_features, y_test, verbose=0)
+
+print(f"Training Classification Accuracy: {train_accuracy * 100:.2f}% | Training Loss: {train_loss:.4f}")
+print(f"Testing Classification Accuracy:  {test_accuracy * 100:.2f}% | Testing Loss:  {test_loss:.4f}")
+
+# Plot Accuracy and Loss curves of the custom classifier
+plt.figure(figsize=(12, 4.5))
+
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label='Train Accuracy', marker='o', markersize=4)
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy', marker='s', markersize=4)
+plt.title('Classifier Accuracy on VGG16 Extracted Features')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label='Train Loss', marker='o', markersize=4)
+plt.plot(history.history['val_loss'], label='Validation Loss', marker='s', markersize=4)
+plt.title('Classifier Loss on VGG16 Extracted Features')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend()
+
+plt.tight_layout()
+plt.show()
+
+# Visualize predictions on 5 sample test images using their extracted test_features
+np.random.seed(42)
+sample_indices = np.random.choice(len(test_features), size=5, replace=False)
+pred_probs = classifier.predict(test_features[sample_indices], verbose=0)
+pred_classes = np.argmax(pred_probs, axis=1)
+
+plt.figure(figsize=(15, 3.8))
+for i, idx in enumerate(sample_indices):
+    plt.subplot(1, 5, i + 1)
+    plt.imshow(X_test_raw[idx].astype('uint8'))
+    actual_cat = selected_categories[y_test_idx[idx]]
+    pred_cat = selected_categories[pred_classes[i]]
+    color = 'green' if actual_cat == pred_cat else 'red'
+    plt.title(f"Actual: {actual_cat}\nPred: {pred_cat}", color=color, fontweight='bold')
+    plt.axis('off')
+plt.tight_layout()
+plt.show()
