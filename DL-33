@@ -1,0 +1,192 @@
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+
+print("TensorFlow Version:", tf.__version__)
+
+# (b) Dataset Access: Check for local energy consumption CSV or generate realistic electricity dataset
+csv_candidates = ['energy_consumption.csv', 'AEP_hourly.csv', 'power_consumption.csv']
+loaded_file = next((f for f in csv_candidates if os.path.exists(f)), None)
+
+if loaded_file:
+    print(f"Loading dataset from local file: {loaded_file}")
+    df = pd.read_csv(loaded_file)
+    # Select all numerical columns
+    num_df = df.select_dtypes(include=[np.number]).copy()
+    # If dataset has only 1 numerical column (e.g., hourly MW), create 24-hour sliding windows
+    if num_df.shape[1] == 1:
+        series = num_df.iloc[:, 0].ffill().bfill().values
+        window = 24
+        X_all = np.array([series[i:i+window] for i in range(len(series) - window)])
+        feature_names = [f'Hour_{i+1}' for i in range(window)]
+        num_df = pd.DataFrame(X_all, columns=feature_names)
+else:
+    print("Generating realistic 24-hour Smart Meter Energy Consumption dataset (with normal & anomalous profiles)...")
+    np.random.seed(42)
+    n_normal = 1800
+    n_anomalies = 200
+    hours = np.arange(24)
+    
+    # Normal daily 24-hour electricity usage pattern (kWh) + small Gaussian noise
+    base_curve = 2.5 + 1.5 * np.sin((hours - 6) * np.pi / 12) + 0.8 * np.sin((hours - 18) * np.pi / 6)
+    normal_profiles = base_curve + np.random.normal(0, 0.2, size=(n_normal, 24))
+    
+    # Unusual/Abnormal energy consumption patterns (power surges, equipment faults, midnight spikes)
+    anomaly_profiles = base_curve + np.random.normal(0, 0.25, size=(n_anomalies, 24))
+    for i in range(n_anomalies):
+        spike_hours = np.random.choice(24, size=4, replace=False)
+        anomaly_profiles[i, spike_hours] += np.random.uniform(3.5, 6.0, size=4)
+        
+    all_profiles = np.vstack([normal_profiles, anomaly_profiles])
+    feature_names = [f'Hour_{h:02d}_kWh' for h in range(24)]
+    num_df = pd.DataFrame(all_profiles, columns=feature_names)
+    # Inject a few missing values (NaN) to demonstrate Step (c) missing value handling
+    num_df.iloc[10, 3] = np.nan
+    num_df.iloc[45, 12] = np.nan
+
+# (c) Data Preprocessing: Handle missing values, normalize, and prepare Train/Test splits
+print(f"Missing values before imputation: {num_df.isna().sum().sum()}")
+num_df = num_df.ffill().bfill()
+print(f"Missing values after imputation:  {num_df.isna().sum().sum()}")
+
+X_raw = num_df.values.astype('float32')
+
+# Use the first 80% (normal operating records) for training and the remaining 20% for testing
+train_size = int(0.8 * len(X_raw))
+X_train_raw = X_raw[:train_size]
+X_test_raw = X_raw[train_size:]
+
+# Normalize energy consumption values to [0, 1]
+scaler = MinMaxScaler()
+X_train = scaler.fit_transform(X_train_raw)
+X_test = scaler.transform(X_test_raw)
+
+input_dim = X_train.shape[1]
+print(f"Training set shape: {X_train.shape} | Testing set shape: {X_test.shape}")
+
+# (d) Encoder Implementation: Compress input energy features into a compressed latent representation
+encoder = models.Sequential([
+    layers.Input(shape=(input_dim,), name='Energy_Input'),
+    layers.Dense(16, activation='relu', name='Encoder_Dense_1'),
+    layers.Dense(8, activation='relu', name='Encoder_Dense_2'),
+    layers.Dense(4, activation='relu', name='Latent_Representation')
+], name='Energy_Encoder')
+
+# (e) Decoder Implementation: Reconstruct original energy values from the latent representation
+decoder = models.Sequential([
+    layers.Input(shape=(4,), name='Latent_Input'),
+    layers.Dense(8, activation='relu', name='Decoder_Dense_1'),
+    layers.Dense(16, activation='relu', name='Decoder_Dense_2'),
+    layers.Dense(input_dim, activation='sigmoid', name='Reconstructed_Energy_Output')
+], name='Energy_Decoder')
+
+# Combine Encoder and Decoder into the Autoencoder model
+autoencoder = models.Sequential([encoder, decoder], name='Energy_Anomaly_Autoencoder')
+
+# (f) Model Compilation: Adam optimizer, MSE loss, and MAE evaluation metric
+autoencoder.compile(
+    optimizer='adam',
+    loss='mse',
+    metrics=['mae']
+)
+
+encoder.summary()
+decoder.summary()
+autoencoder.summary()
+
+# Train the Autoencoder
+history = autoencoder.fit(
+    X_train, X_train,
+    epochs=40,
+    batch_size=32,
+    validation_split=0.2,
+    shuffle=True,
+    verbose=1
+)
+
+# Reconstruct training data to determine normal reconstruction error distribution
+X_train_pred = autoencoder.predict(X_train, verbose=0)
+train_mse_errors = np.mean(np.square(X_train - X_train_pred), axis=1)
+
+# Set anomaly threshold at Mean + 3 * Std of training reconstruction errors
+threshold = np.mean(train_mse_errors) + 3 * np.std(train_mse_errors)
+print(f"Validation-Based Reconstruction Error Threshold (MSE): {threshold:.6f}")
+
+# Reconstruct test data and compute reconstruction errors
+X_test_pred = autoencoder.predict(X_test, verbose=0)
+test_mse_errors = np.mean(np.square(X_test - X_test_pred), axis=1)
+
+# Identify unusual/abnormal energy consumption patterns (Error > Threshold)
+anomalies_mask = test_mse_errors > threshold
+num_anomalies = np.sum(anomalies_mask)
+
+print(f"Total Test Records Evaluated:               {len(X_test)}")
+print(f"Normal Energy Consumption Patterns Found:   {len(X_test) - num_anomalies}")
+print(f"Abnormal/Unusual Consumption Patterns Found:{num_anomalies}")
+
+# Inverse-transform normalized values back to original energy units (kWh) for clear interpretation
+X_test_actual_kwh = scaler.inverse_transform(X_test)
+X_test_recon_kwh = scaler.inverse_transform(X_test_pred)
+
+normal_indices = np.where(~anomalies_mask)[0]
+anomaly_indices = np.where(anomalies_mask)[0]
+
+norm_idx = normal_indices[0] if len(normal_indices) > 0 else 0
+anom_idx = anomaly_indices[0] if len(anomaly_indices) > 0 else -1
+
+# 1. Plot Actual vs. Reconstructed Energy Consumption Values (Normal vs. Abnormal Sample)
+plt.figure(figsize=(14, 4.5))
+
+plt.subplot(1, 2, 1)
+plt.plot(X_test_actual_kwh[norm_idx], 'b-o', markersize=4, label='Actual Energy Usage (kWh)')
+plt.plot(X_test_recon_kwh[norm_idx], 'g--s', markersize=4, label='Reconstructed Usage (kWh)')
+plt.fill_between(range(input_dim), X_test_actual_kwh[norm_idx], X_test_recon_kwh[norm_idx], color='lightgreen', alpha=0.4, label='Error')
+plt.title(f'Normal Energy Pattern (Test Sample #{norm_idx})\nMSE Error: {test_mse_errors[norm_idx]:.5f}')
+plt.xlabel('Feature / Time Step (Hours)')
+plt.ylabel('Energy Consumption (kWh)')
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(X_test_actual_kwh[anom_idx], 'b-o', markersize=4, label='Actual Energy Usage (kWh)')
+plt.plot(X_test_recon_kwh[anom_idx], 'r--s', markersize=4, label='Reconstructed Usage (kWh)')
+plt.fill_between(range(input_dim), X_test_actual_kwh[anom_idx], X_test_recon_kwh[anom_idx], color='lightcoral', alpha=0.5, label='Anomaly Error')
+plt.title(f'Abnormal Energy Pattern (Test Sample #{anom_idx})\nMSE Error: {test_mse_errors[anom_idx]:.5f}')
+plt.xlabel('Feature / Time Step (Hours)')
+plt.ylabel('Energy Consumption (kWh)')
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.legend()
+
+plt.tight_layout()
+plt.show()
+
+# 2. Plot Reconstruction Error Graph Across Test Samples with Threshold Line
+plt.figure(figsize=(12, 4.5))
+plt.plot(test_mse_errors, color='steelblue', alpha=0.8, label='Test Reconstruction Error (MSE)')
+plt.scatter(anomaly_indices, test_mse_errors[anomaly_indices], color='red', s=25, zorder=5, label='Detected Abnormal Consumption')
+plt.axhline(threshold, color='black', linestyle='--', linewidth=2, label=f'Threshold = {threshold:.5f}')
+plt.title('Reconstruction Error Graph & Detected Energy Consumption Anomalies')
+plt.xlabel('Test Sample Index')
+plt.ylabel('Reconstruction Error (MSE)')
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# 3. Display Table of Detected Abnormal Energy Consumption Patterns
+results_df = pd.DataFrame({
+    'Test Record Index': np.arange(len(X_test)),
+    'Actual Mean Usage (kWh)': np.round(np.mean(X_test_actual_kwh, axis=1), 2),
+    'Reconstructed Mean Usage (kWh)': np.round(np.mean(X_test_recon_kwh, axis=1), 2),
+    'Reconstruction Error (MSE)': np.round(test_mse_errors, 6),
+    'Threshold': round(threshold, 6),
+    'Consumption Status': ['Abnormal (Unusual)' if is_anom else 'Normal' for is_anom in anomalies_mask]
+})
+
+print("=== Sample Normal & Detected Abnormal Energy Consumption Records ===")
+display(pd.concat([results_df[~anomalies_mask].head(5), results_df[anomalies_mask].head(5)]))
