@@ -1,0 +1,122 @@
+import string
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+print("TensorFlow Version:", tf.__version__)
+
+corpus = """
+Artificial intelligence and deep learning transform modern software engineering.
+Continuous bag of words learns dense word representations from a text corpus.
+Surrounding context words help the neural network predict the center target word.
+Learned word embeddings capture semantic similarity in vector space.
+"""
+
+# Convert to lowercase, remove punctuation, and tokenize into words
+clean_text = corpus.lower().translate(str.maketrans('', '', string.punctuation))
+tokens = clean_text.split()
+
+# Build vocabulary and word-to-index / index-to-word dictionaries
+vocab = sorted(list(set(tokens)))
+vocab_size = len(vocab)
+
+word_to_idx = {word: idx for idx, word in enumerate(vocab)}
+idx_to_word = {idx: word for idx, word in enumerate(vocab)}
+
+print(f"Total Words in Corpus: {len(tokens)} | Unique Vocabulary Size: {vocab_size}")
+print("Vocabulary Mapping:", word_to_idx)
+
+FIXED_WINDOW = 2
+context_length = 2 * FIXED_WINDOW
+
+X_context = []
+y_target = []
+pair_records = []
+
+for i in range(FIXED_WINDOW, len(tokens) - FIXED_WINDOW):
+    target_word = tokens[i]
+    context_words = (
+        [tokens[i - j] for j in range(FIXED_WINDOW, 0, -1)] +
+        [tokens[i + j] for j in range(1, FIXED_WINDOW + 1)]
+    )
+    
+    X_context.append([word_to_idx[w] for w in context_words])
+    y_target.append(word_to_idx[target_word])
+    
+    pair_records.append({
+        'Context Words': ', '.join(context_words),
+        'Context Indices': [word_to_idx[w] for w in context_words],
+        'Target Word': target_word,
+        'Target Index': word_to_idx[target_word]
+    })
+
+X_train = np.array(X_context)
+y_train = np.array(y_target)
+
+print(f"X_train shape: {X_train.shape} | y_train shape: {y_train.shape}\n")
+display(pd.DataFrame(pair_records[:10]))
+
+embedding_dim = 16
+
+model = models.Sequential([
+    layers.Embedding(input_dim=vocab_size, output_dim=embedding_dim, input_length=context_length, name='Word_Embedding'),
+    layers.GlobalAveragePooling1D(name='Context_Mean_Pooling'),
+    layers.Dense(64, activation='relu', name='Hidden_Dense'),
+    layers.Dense(vocab_size, activation='softmax', name='Target_Word_Output')
+], name='CBOW_Word_Representation_Model')
+
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+# Train the CBOW model
+history = model.fit(
+    X_train, y_train,
+    epochs=150,
+    batch_size=8,
+    verbose=0
+)
+
+print(f"\nFinal Training Loss:     {history.history['loss'][-1]:.4f}")
+print(f"Final Training Accuracy: {history.history['accuracy'][-1] * 100:.2f}%\n")
+
+# Extract and display the learned dense word representations (embeddings) for sample words
+embedding_weights = model.get_layer('Word_Embedding').get_weights()[0]
+sample_words = ['deep', 'learning', 'word', 'embeddings', 'corpus']
+emb_df = pd.DataFrame(
+    [np.round(embedding_weights[word_to_idx[w]][:6], 4) for w in sample_words],
+    index=sample_words,
+    columns=[f'Dim_{i+1}' for i in range(6)]
+)
+print("Sample Learned Word Representations (First 6 Embedding Dimensions):")
+display(emb_df)
+
+test_contexts = [
+    ['artificial', 'intelligence', 'deep', 'learning'],    # Expected target: 'and'
+    ['learns', 'dense', 'representations', 'from'],        # Expected target: 'word'
+    ['the', 'neural', 'predict', 'the'],                   # Expected target: 'network'
+    ['word', 'embeddings', 'semantic', 'similarity']       # Expected target: 'capture'
+]
+
+pred_results = []
+for ctx in test_contexts:
+    ctx_ids = np.array([[word_to_idx[w] for w in ctx]])
+    probs = model.predict(ctx_ids, verbose=0)
+    pred_id = np.argmax(probs, axis=1)[0]
+    pred_word = idx_to_word[pred_id]
+    conf = np.max(probs) * 100
+    
+    pred_results.append({
+        'Given Context Words': ', '.join(ctx),
+        'Predicted Target Word': pred_word,
+        'Confidence (%)': round(conf, 2)
+    })
+
+print("Predicted Target Words for Given Context Words:")
+display(pd.DataFrame(pred_results))
