@@ -1,0 +1,109 @@
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+print("TensorFlow Version:", tf.__version__)
+
+if os.path.exists('fashion-mnist_train.csv') and os.path.exists('fashion-mnist_test.csv'):
+    train_df = pd.read_csv('fashion-mnist_train.csv')
+    test_df = pd.read_csv('fashion-mnist_test.csv')
+    y_train = train_df['label'].values
+    X_train = train_df.drop('label', axis=1).values
+    y_test = test_df['label'].values
+    X_test = test_df.drop('label', axis=1).values
+else:
+    (X_train, y_train), (X_test, y_test) = tf.keras.datasets.fashion_mnist.load_data()
+
+# Define the 10 clothing category names corresponding to labels 0-9
+class_names = [
+    'T-shirt/top', 'Trouser', 'Pullover', 'Dress', 'Coat',
+    'Sandal', 'Shirt', 'Sneaker', 'Bag', 'Ankle boot'
+]
+
+# Normalize pixel values to [0, 1] and reshape to (num_samples, 28, 28, 1)
+X_train = (X_train.astype('float32') / 255.0).reshape(-1, 28, 28, 1)
+X_test = (X_test.astype('float32') / 255.0).reshape(-1, 28, 28, 1)
+
+print(f"Training set shape: {X_train.shape} | Labels shape: {y_train.shape}")
+print(f"Testing set shape:  {X_test.shape}  | Labels shape: {y_test.shape}")
+
+model = models.Sequential([
+    # 1st Convolution & Max-Pooling Block
+    layers.Conv2D(32, (3, 3), activation='relu', padding='same', input_shape=(28, 28, 1)),
+    layers.MaxPooling2D((2, 2)),
+    
+    # 2nd Convolution & Max-Pooling Block
+    layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
+    layers.MaxPooling2D((2, 2)),
+    
+    # Flatten and Dense Classification Head
+    layers.Flatten(),
+    layers.Dense(128, activation='relu'),
+    layers.Dropout(0.3),
+    layers.Dense(10, activation='softmax')  # 10 clothing classes (0-9)
+])
+
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+history = model.fit(
+    X_train, y_train,
+    epochs=12,
+    batch_size=64,
+    validation_split=0.2,
+    verbose=1
+)
+
+test_loss, test_accuracy = model.evaluate(X_test, y_test, verbose=0)
+print(f"\nTest Loss:     {test_loss:.4f}")
+print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
+
+# Select 5 random test images
+np.random.seed(42)
+sample_indices = np.random.choice(len(X_test), size=5, replace=False)
+
+sample_images = X_test[sample_indices]
+sample_actual = y_test[sample_indices]
+
+# Predict class probabilities and extract predicted class indices
+pred_probs = model.predict(sample_images, verbose=0)
+sample_preds = np.argmax(pred_probs, axis=1)
+sample_conf = np.max(pred_probs, axis=1) * 100
+
+# Visualize the 5 test images with Actual vs. Predicted Clothing Labels
+plt.figure(figsize=(15, 3.8))
+for i in range(5):
+    plt.subplot(1, 5, i + 1)
+    plt.imshow(sample_images[i].squeeze(), cmap='gray')
+    
+    actual_label = class_names[sample_actual[i]]
+    pred_label = class_names[sample_preds[i]]
+    
+    title_color = 'green' if actual_label == pred_label else 'red'
+    plt.title(f"Actual: {actual_label}\nPred: {pred_label}\n({sample_conf[i]:.1f}%)",
+              color=title_color, fontweight='bold', fontsize=10)
+    plt.axis('off')
+
+plt.tight_layout()
+plt.show()
+
+# Display formatted summary table
+results_df = pd.DataFrame({
+    'Test Index': sample_indices,
+    'Actual Class ID': sample_actual,
+    'Actual Clothing Category': [class_names[idx] for idx in sample_actual],
+    'Predicted Class ID': sample_preds,
+    'Predicted Clothing Category': [class_names[idx] for idx in sample_preds],
+    'Confidence (%)': np.round(sample_conf, 2)
+})
+
+print("\nPredicted Clothing Categories for Five Test Images:")
+display(results_df)
