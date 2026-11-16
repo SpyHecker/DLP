@@ -1,0 +1,140 @@
+import string
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+print("TensorFlow Version:", tf.__version__)
+
+corpus = """
+Natural language processing enables computers to understand human language.
+Continuous bag of words uses a sliding context window around the target word.
+Two words on either side of the target word provide semantic context.
+Embedding layers map discrete word indices into dense continuous vectors.
+"""
+
+# Convert to lowercase, remove punctuation, and split into tokens
+clean_text = corpus.lower().translate(str.maketrans('', '', string.punctuation))
+tokens = clean_text.split()
+
+# Build vocabulary mappings
+vocab = sorted(list(set(tokens)))
+vocab_size = len(vocab)
+
+word_to_idx = {word: idx for idx, word in enumerate(vocab)}
+idx_to_word = {idx: word for idx, word in enumerate(vocab)}
+
+print(f"Total Tokens: {len(tokens)} | Unique Vocabulary Size: {vocab_size}")
+print("Vocabulary:", word_to_idx)
+
+window_size = 2
+context_length = 2 * window_size  # 2 words on left + 2 words on right = 4 context words
+
+X_context = []
+y_target = []
+sample_records = []
+
+for i in range(window_size, len(tokens) - window_size):
+    left_context = [tokens[i - 2], tokens[i - 1]]
+    target_word = tokens[i]
+    right_context = [tokens[i + 1], tokens[i + 2]]
+    
+    context_words = left_context + right_context
+    
+    X_context.append([word_to_idx[w] for w in context_words])
+    y_target.append(word_to_idx[target_word])
+    
+    sample_records.append({
+        'Left Context (-2, -1)': left_context,
+        'Target Word (0)': target_word,
+        'Right Context (+1, +2)': right_context,
+        'Context Indices': [word_to_idx[w] for w in context_words],
+        'Target Index': word_to_idx[target_word]
+    })
+
+X_train = np.array(X_context)
+y_train = np.array(y_target)
+
+print(f"Generated Training Samples (X_train shape): {X_train.shape}")
+print(f"Generated Target Labels   (y_train shape): {y_train.shape}\n")
+
+# Display first 10 generated training samples
+samples_df = pd.DataFrame(sample_records[:10])
+display(samples_df)
+
+embedding_dim = 16
+
+model = models.Sequential([
+    layers.Embedding(input_dim=vocab_size, output_dim=embedding_dim, input_length=context_length, name='Word_Embedding'),
+    layers.GlobalAveragePooling1D(name='Average_4_Context_Words'),
+    layers.Dense(64, activation='relu', name='Hidden_Dense'),
+    layers.Dense(vocab_size, activation='softmax', name='Target_Word_Output')
+], name='CBOW_Window2_Model')
+
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+# Train the embedding-based neural network
+history = model.fit(
+    X_train, y_train,
+    epochs=150,
+    batch_size=8,
+    verbose=0
+)
+
+print(f"\nFinal Training Loss:     {history.history['loss'][-1]:.4f}")
+print(f"Final Training Accuracy: {history.history['accuracy'][-1] * 100:.2f}%")
+
+# Plot Training Accuracy & Loss
+plt.figure(figsize=(10, 4))
+plt.subplot(1, 2, 1)
+plt.plot(history.history['loss'], color='tab:red', label='Loss')
+plt.title('CBOW Training Loss (Window = 2)')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(history.history['accuracy'], color='tab:green', label='Accuracy')
+plt.title('CBOW Training Accuracy (Window = 2)')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend()
+
+plt.tight_layout()
+plt.show()
+
+# Define test contexts of 2 words before and 2 words after the target word
+test_contexts = [
+    ['language', 'processing', 'computers', 'to'],    # Expected target: 'enables'
+    ['a', 'sliding', 'window', 'around'],             # Expected target: 'context'
+    ['words', 'on', 'side', 'of'],                    # Expected target: 'either'
+    ['map', 'discrete', 'indices', 'into']            # Expected target: 'word'
+]
+
+prediction_rows = []
+for ctx in test_contexts:
+    ctx_ids = np.array([[word_to_idx[w] for w in ctx]])
+    probs = model.predict(ctx_ids, verbose=0)
+    pred_id = np.argmax(probs, axis=1)[0]
+    pred_word = idx_to_word[pred_id]
+    conf = np.max(probs) * 100
+    
+    prediction_rows.append({
+        'Left 2 Words': f"{ctx[0]}, {ctx[1]}",
+        'Right 2 Words': f"{ctx[2]}, {ctx[3]}",
+        'Predicted Target Word': pred_word,
+        'Confidence (%)': round(conf, 2)
+    })
+
+pred_df = pd.DataFrame(prediction_rows)
+print("Predicted Target Words for Given 2-Sided Context Windows:")
+display(pred_df)
