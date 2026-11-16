@@ -1,0 +1,54 @@
+import os
+import glob
+import numpy as np
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
+
+# Path to your CIFAR-10-images folder (update if your folder has a different name)
+DATASET_DIR = 'CIFAR-10-images'  # Contains 'train' and 'test' subfolders
+
+def load_cifar10_from_folders(folder_path, max_per_class=None):
+    images = []
+    labels = []
+    # Sort folder names alphabetically so class indices 0-9 are consistent
+    class_names = sorted([
+        d for d in os.listdir(folder_path) 
+        if os.path.isdir(os.path.join(folder_path, d))
+    ])
+    
+    for class_idx, class_name in enumerate(class_names):
+        class_dir = os.path.join(folder_path, class_name)
+        img_files = (glob.glob(os.path.join(class_dir, '*.jpg')) + 
+                     glob.glob(os.path.join(class_dir, '*.jpeg')) + 
+                     glob.glob(os.path.join(class_dir, '*.png')))
+        
+        if max_per_class:
+            img_files = img_files[:max_per_class]
+            
+        for img_path in img_files:
+            # Load image at 32x32 RGB resolution
+            img = load_img(img_path, target_size=(32, 32))
+            images.append(img_to_array(img))
+            labels.append(class_idx)
+            
+    return np.array(images, dtype='float32'), np.array(labels), class_names
+
+# 1. Load Train and Test sets from folders
+# Tip: Set max_per_class=1000 during lab exam if you want faster loading, or None for all 50,000 images
+X_train, y_train, class_names = load_cifar10_from_folders(os.path.join(DATASET_DIR, 'train'), max_per_class=None)
+X_test, y_test, _ = load_cifar10_from_folders(os.path.join(DATASET_DIR, 'test'), max_per_class=None)
+
+# 2. Preprocess: Normalize RGB pixel values from [0, 255] to [0, 1]
+X_train = X_train / 255.0
+X_test = X_test / 255.0
+
+print("Classes:", class_names)
+print(f"Training set shape: {X_train.shape} | Labels shape: {y_train.shape}")
+print(f"Testing set shape:  {X_test.shape}  | Labels shape: {y_test.shape}")
+
+
+---------------------------------------------------------------------------
+
+with open("corpus.txt", "r", encoding="utf-8") as f:
+    corpus = f.read()
+
+print(corpus)
