@@ -1,0 +1,168 @@
+import os
+import glob
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from tensorflow.keras.applications import VGG16
+from tensorflow.keras.applications.vgg16 import preprocess_input
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
+from tensorflow.keras.utils import to_categorical
+from sklearn.model_selection import train_test_split
+
+print("TensorFlow Version:", tf.__version__)
+
+# Path to local Caltech-101 directory (e.g., './101_ObjectCategories' or './caltech-101/101_ObjectCategories')
+DATASET_DIR = '101_ObjectCategories'
+
+# (a) Select any 5 object categories from Caltech-101
+selected_categories = ['airplanes', 'Motorbikes', 'Faces', 'watch', 'sunflower']
+
+# If user has different folder names inside DATASET_DIR, auto-select the first 5 available category folders
+if os.path.exists(DATASET_DIR):
+    available_dirs = [d for d in sorted(os.listdir(DATASET_DIR)) 
+                      if os.path.isdir(os.path.join(DATASET_DIR, d)) and d != 'BACKGROUND_Google']
+    if not all(cat in available_dirs for cat in selected_categories):
+        selected_categories = available_dirs[:5]
+    print("Selected 5 Categories from local directory:", selected_categories)
+    
+    images_raw = []   # Keep RGB [0, 255] copies for visualization in Step (h)
+    labels = []
+    
+    for class_idx, category in enumerate(selected_categories):
+        cat_path = os.path.join(DATASET_DIR, category)
+        img_files = glob.glob(os.path.join(cat_path, '*.jpg')) + glob.glob(os.path.join(cat_path, '*.jpeg')) + glob.glob(os.path.join(cat_path, '*.png'))
+        # Limit up to 150 images per class for balanced, fast lab execution
+        for img_path in img_files[:150]:
+            # (b) Resize image to 224 x 224 pixels
+            img = load_img(img_path, target_size=(224, 224))
+            img_array = img_to_array(img)
+            images_raw.append(img_array)
+            labels.append(class_idx)
+            
+    images_raw = np.array(images_raw, dtype='float32')
+    labels = np.array(labels)
+else:
+    # Fallback: Load via tensorflow_datasets if local folder is not in current directory
+    import tensorflow_datasets as tfds
+    ds, info = tfds.load('caltech101', split='train+test', with_info=True, as_supervised=True)
+    all_label_names = info.features['label'].names
+    target_indices = [i for i, name in enumerate(all_label_names) if name.lower() != 'background_google'][:5]
+    selected_categories = [all_label_names[i] for i in target_indices]
+    print("Selected 5 Categories via TFDS:", selected_categories)
+    
+    images_raw, labels = [], []
+    for img, lbl in tfds.as_numpy(ds):
+        if lbl in target_indices:
+            img_resized = tf.image.resize(img, (224, 224)).numpy()
+            images_raw.append(img_resized)
+            labels.append(target_indices.index(lbl))
+    images_raw = np.array(images_raw, dtype='float32')
+    labels = np.array(labels)
+
+# Split into Training (80%) and Testing (20%) sets
+X_train_raw, X_test_raw, y_train_idx, y_test_idx = train_test_split(
+    images_raw, labels, test_size=0.2, random_state=42, stratify=labels
+)
+
+# (b) Normalize images using VGG16's preprocess_input function (converts RGB to BGR and zero-centers per ImageNet channel)
+X_train = preprocess_input(X_train_raw.copy())
+X_test = preprocess_input(X_test_raw.copy())
+
+# One-hot encode labels for categorical_crossentropy loss (5 classes)
+num_classes = len(selected_categories)
+y_train = to_categorical(y_train_idx, num_classes=num_classes)
+y_test = to_categorical(y_test_idx, num_classes=num_classes)
+
+print(f"Training data shape: {X_train.shape} | One-hot labels shape: {y_train.shape}")
+print(f"Testing data shape:  {X_test.shape}  | One-hot labels shape: {y_test.shape}")
+
+# (c) Load pre-trained VGG16 model with ImageNet weights, excluding top classification layers
+# NOTE: If running offline with a local weights file, replace weights='imagenet' with weights='vgg16_weights_tf_dim_ordering_tf_kernels_notop.h5'
+base_model = VGG16(
+    weights='imagenet',
+    include_top=False,
+    input_shape=(224, 224, 3)
+)
+
+# (d) Freeze all pre-trained convolutional layers
+base_model.trainable = False
+for layer in base_model.layers:
+    layer.trainable = False
+
+print(f"VGG16 Base Model Loaded. Total layers: {len(base_model.layers)} | Base Trainable: {base_model.trainable}")
+
+# (e) Build Transfer Learning model with custom classification head
+model = models.Sequential([
+    base_model,
+    layers.GlobalAveragePooling2D(name='GlobalAvgPool'),
+    layers.Dense(256, activation='relu', name='Custom_Dense'),
+    layers.Dropout(0.4, name='Custom_Dropout'),
+    layers.Dense(num_classes, activation='softmax', name='Softmax_Output')
+], name='VGG16_Caltech101_Classifier')
+
+# (f) Compile using Adam optimizer and categorical cross-entropy loss
+model.compile(
+    optimizer='adam',
+    loss='categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+# (g) Train the custom classification layers
+history = model.fit(
+    X_train, y_train,
+    epochs=10,
+    batch_size=32,
+    validation_split=0.2,
+    verbose=1
+)
+
+# Evaluate the model using test images
+test_loss, test_accuracy = model.evaluate(X_test, y_test, verbose=0)
+
+# (h) Display Test Accuracy
+print(f"Test Loss:     {test_loss:.4f}")
+print(f"Test Accuracy: {test_accuracy * 100:.2f}%\n")
+
+# Select 5 random test images
+np.random.seed(42)
+sample_indices = np.random.choice(len(X_test), size=5, replace=False)
+
+sample_inputs = X_test[sample_indices]
+sample_raw_imgs = X_test_raw[sample_indices].astype('uint8')  # Original RGB [0, 255] for clean display
+sample_actual_idx = y_test_idx[sample_indices]
+
+# Predict object categories
+pred_probs = model.predict(sample_inputs, verbose=0)
+sample_pred_idx = np.argmax(pred_probs, axis=1)
+sample_conf = np.max(pred_probs, axis=1) * 100
+
+# Plot the 5 sample test images with Actual and Predicted Object Categories
+plt.figure(figsize=(15, 4))
+for i in range(5):
+    plt.subplot(1, 5, i + 1)
+    plt.imshow(sample_raw_imgs[i])
+    
+    actual_cat = selected_categories[sample_actual_idx[i]]
+    pred_cat = selected_categories[sample_pred_idx[i]]
+    
+    title_color = 'green' if actual_cat == pred_cat else 'red'
+    plt.title(f"Actual: {actual_cat}\nPred: {pred_cat}\n({sample_conf[i]:.1f}%)",
+              color=title_color, fontweight='bold', fontsize=10)
+    plt.axis('off')
+
+plt.tight_layout()
+plt.show()
+
+# Display formatted comparison table
+results_df = pd.DataFrame({
+    'Test Sample Index': sample_indices,
+    'Actual Category': [selected_categories[idx] for idx in sample_actual_idx],
+    'Predicted Category': [selected_categories[idx] for idx in sample_pred_idx],
+    'Confidence (%)': np.round(sample_conf, 2),
+    'Status': ['Correct' if a == p else 'Incorrect' for a, p in zip(sample_actual_idx, sample_pred_idx)]
+})
+display(results_df)
