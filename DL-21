@@ -1,0 +1,117 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from sklearn.metrics import confusion_matrix, classification_report
+
+print("TensorFlow Version:", tf.__version__)
+
+# Load CIFAR-10 dataset directly from TensorFlow/Keras
+(X_train, y_train), (X_test, y_test) = tf.keras.datasets.cifar10.load_data()
+
+# Flatten 2D label arrays (num_samples, 1) into 1D arrays (num_samples,)
+y_train = y_train.flatten()
+y_test = y_test.flatten()
+
+# Define the 10 CIFAR-10 object category names (labels 0-9)
+class_names = [
+    'Airplane', 'Automobile', 'Bird', 'Cat', 'Deer',
+    'Dog', 'Frog', 'Horse', 'Ship', 'Truck'
+]
+
+# Normalize RGB pixel values from [0, 255] to [0, 1]
+X_train = X_train.astype('float32') / 255.0
+X_test = X_test.astype('float32') / 255.0
+
+print(f"Training set shape: {X_train.shape} | Labels shape: {y_train.shape}")
+print(f"Testing set shape:  {X_test.shape}  | Labels shape: {y_test.shape}")
+
+model = models.Sequential([
+    # 1st Convolution & Pooling Block
+    layers.Conv2D(32, (3, 3), activation='relu', padding='same', input_shape=(32, 32, 3)),
+    layers.MaxPooling2D((2, 2)),
+    
+    # 2nd Convolution & Pooling Block
+    layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
+    layers.MaxPooling2D((2, 2)),
+    
+    # 3rd Convolution & Pooling Block
+    layers.Conv2D(128, (3, 3), activation='relu', padding='same'),
+    layers.MaxPooling2D((2, 2)),
+    
+    # Flatten and Dense Classification Head
+    layers.Flatten(),
+    layers.Dense(128, activation='relu'),
+    layers.Dropout(0.3),
+    layers.Dense(10, activation='softmax')  # 10 CIFAR-10 object classes (0-9)
+])
+
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+history = model.fit(
+    X_train, y_train,
+    epochs=15,
+    batch_size=64,
+    validation_split=0.2,
+    verbose=1
+)
+
+test_loss, test_accuracy = model.evaluate(X_test, y_test, verbose=0)
+print(f"\nTest Loss:     {test_loss:.4f}")
+print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
+
+# Predict class labels on test images
+y_pred_probs = model.predict(X_test, verbose=0)
+y_pred = np.argmax(y_pred_probs, axis=1)
+
+# Compute 10x10 Confusion Matrix
+cm = confusion_matrix(y_test, y_pred)
+
+# Plot Confusion Matrix Heatmap
+plt.figure(figsize=(10, 8))
+sns.heatmap(
+    cm, annot=True, fmt='d', cmap='Blues',
+    xticklabels=class_names, yticklabels=class_names
+)
+plt.title('Confusion Matrix for CIFAR-10 Object Classification (CNN)', fontsize=13, fontweight='bold')
+plt.xlabel('Predicted Object Category', fontsize=11)
+plt.ylabel('Actual Object Category', fontsize=11)
+plt.xticks(rotation=45, ha='right')
+plt.yticks(rotation=0)
+plt.tight_layout()
+plt.show()
+
+correct_total = np.trace(cm)
+incorrect_total = np.sum(cm) - correct_total
+
+print(f"Total Test Samples:           {len(y_test)}")
+print(f"Correctly Classified Samples: {correct_total} ({correct_total / len(y_test) * 100:.2f}%)")
+print(f"Misclassified Samples:        {incorrect_total} ({incorrect_total / len(y_test) * 100:.2f}%)\n")
+
+summary_rows = []
+for idx, obj_name in enumerate(class_names):
+    total_samples = np.sum(cm[idx, :])
+    correct_count = cm[idx, idx]
+    incorrect_count = total_samples - correct_count
+    summary_rows.append({
+        'Class ID': idx,
+        'Object Category': obj_name,
+        'Total Test Images': total_samples,
+        'Correctly Classified': correct_count,
+        'Incorrectly Classified': incorrect_count,
+        'Class Accuracy (%)': round((correct_count / total_samples) * 100, 2)
+    })
+
+summary_df = pd.DataFrame(summary_rows)
+display(summary_df)
+
+print("\nDetailed Classification Report:")
+print(classification_report(y_test, y_pred, target_names=class_names))
