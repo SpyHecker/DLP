@@ -1,0 +1,124 @@
+import string
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+print("TensorFlow Version:", tf.__version__)
+
+corpus = """
+Deep learning models learn word embeddings from text data.
+Word embeddings represent words as dense vectors in continuous space.
+The CBOW model predicts a target word using surrounding context words.
+"""
+
+# Convert to lowercase, remove punctuation, and tokenize into words
+clean_text = corpus.lower().translate(str.maketrans('', '', string.punctuation))
+tokens = clean_text.split()
+
+# Build vocabulary and word-index mappings
+vocab = sorted(list(set(tokens)))
+vocab_size = len(vocab)
+
+word_to_idx = {word: idx for idx, word in enumerate(vocab)}
+idx_to_word = {idx: word for idx, word in enumerate(vocab)}
+
+print(f"Total Tokens: {len(tokens)} | Vocabulary Size: {vocab_size}")
+print("Vocabulary Mapping:", word_to_idx)
+
+window_size = 2
+context_length = 2 * window_size
+
+X_context = []
+y_target = []
+pair_records = []
+
+for i in range(window_size, len(tokens) - window_size):
+    target_word = tokens[i]
+    context_words = (
+        [tokens[i - j] for j in range(window_size, 0, -1)] +
+        [tokens[i + j] for j in range(1, window_size + 1)]
+    )
+    
+    X_context.append([word_to_idx[w] for w in context_words])
+    y_target.append(word_to_idx[target_word])
+    
+    pair_records.append({
+        'Context Words': ', '.join(context_words),
+        'Context Indices': [word_to_idx[w] for w in context_words],
+        'Target Word': target_word,
+        'Target Index': word_to_idx[target_word]
+    })
+
+X_train = np.array(X_context)
+y_train = np.array(y_target)
+
+print(f"X_train shape: {X_train.shape} | y_train shape: {y_train.shape}\n")
+display(pd.DataFrame(pair_records[:10]))
+
+embedding_dim = 8  # Compact 8-D embedding vector for clear tabular display
+
+model = models.Sequential([
+    layers.Embedding(input_dim=vocab_size, output_dim=embedding_dim, input_length=context_length, name='Word_Embedding'),
+    layers.GlobalAveragePooling1D(name='Average_Context_Embedding'),
+    layers.Dense(vocab_size, activation='softmax', name='Softmax_Output')
+], name='CBOW_Embedding_Softmax_Model')
+
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.01),
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+# Train the CBOW model
+history = model.fit(
+    X_train, y_train,
+    epochs=200,
+    batch_size=4,
+    verbose=0
+)
+
+print(f"\nFinal Training Loss:     {history.history['loss'][-1]:.4f}")
+print(f"Final Training Accuracy: {history.history['accuracy'][-1] * 100:.2f}%")
+
+# 1. Extract and Display the Learned Word Embeddings Table
+learned_embeddings = model.get_layer('Word_Embedding').get_weights()[0]
+
+embeddings_df = pd.DataFrame(
+    np.round(learned_embeddings, 4),
+    index=vocab,
+    columns=[f'Dim_{i+1}' for i in range(embedding_dim)]
+)
+embeddings_df.index.name = 'Vocabulary Word'
+
+print("=== 1. LEARNED WORD EMBEDDINGS (All Vocabulary Words) ===")
+display(embeddings_df)
+
+# 2. Display Predicted Words for Sample Contexts
+test_contexts = [
+    ['deep', 'learning', 'learn', 'word'],        # Expected target: 'models'
+    ['learn', 'word', 'from', 'text'],            # Expected target: 'embeddings'
+    ['represent', 'words', 'dense', 'vectors'],   # Expected target: 'as'
+    ['predicts', 'a', 'word', 'using']            # Expected target: 'target'
+]
+
+pred_records = []
+for ctx in test_contexts:
+    ctx_ids = np.array([[word_to_idx[w] for w in ctx]])
+    probs = model.predict(ctx_ids, verbose=0)
+    pred_id = np.argmax(probs, axis=1)[0]
+    pred_word = idx_to_word[pred_id]
+    conf = np.max(probs) * 100
+    
+    pred_records.append({
+        'Context Words': ', '.join(ctx),
+        'Predicted Target Word': pred_word,
+        'Confidence (%)': round(conf, 2)
+    })
+
+print("\n=== 2. PREDICTED TARGET WORDS ===")
+display(pd.DataFrame(pred_records))
+
