@@ -1,0 +1,106 @@
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from sklearn.metrics import confusion_matrix, classification_report
+
+print("TensorFlow Version:", tf.__version__)
+
+if os.path.exists('fashion-mnist_train.csv') and os.path.exists('fashion-mnist_test.csv'):
+    train_df = pd.read_csv('fashion-mnist_train.csv')
+    test_df = pd.read_csv('fashion-mnist_test.csv')
+    y_train = train_df['label'].values
+    X_train = train_df.drop('label', axis=1).values.reshape(-1, 28, 28)
+    y_test = test_df['label'].values
+    X_test = test_df.drop('label', axis=1).values.reshape(-1, 28, 28)
+else:
+    (X_train, y_train), (X_test, y_test) = tf.keras.datasets.fashion_mnist.load_data()
+
+class_names = [
+    'T-shirt/top', 'Trouser', 'Pullover', 'Dress', 'Coat',
+    'Sandal', 'Shirt', 'Sneaker', 'Bag', 'Ankle boot'
+]
+
+X_train = X_train.astype('float32') / 255.0
+X_test = X_test.astype('float32') / 255.0
+
+print(f"Training set shape: {X_train.shape} | Labels shape: {y_train.shape}")
+print(f"Testing set shape:  {X_test.shape}  | Labels shape: {y_test.shape}")
+
+model = models.Sequential([
+    layers.Flatten(input_shape=(28, 28)),
+    layers.Dense(256, activation='relu'),
+    layers.Dropout(0.2),
+    layers.Dense(128, activation='relu'),
+    layers.Dropout(0.2),
+    layers.Dense(64, activation='relu'),
+    layers.Dense(10, activation='softmax')
+])
+
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+history = model.fit(
+    X_train, y_train,
+    epochs=15,
+    batch_size=64,
+    validation_split=0.2,
+    verbose=1
+)
+
+test_loss, test_accuracy = model.evaluate(X_test, y_test, verbose=0)
+print(f"\nTest Loss:     {test_loss:.4f}")
+print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
+
+y_pred_probs = model.predict(X_test, verbose=0)
+y_pred = np.argmax(y_pred_probs, axis=1)
+
+cm = confusion_matrix(y_test, y_pred)
+
+plt.figure(figsize=(10, 8))
+sns.heatmap(
+    cm, annot=True, fmt='d', cmap='Blues',
+    xticklabels=class_names, yticklabels=class_names
+)
+plt.title('Confusion Matrix for Fashion-MNIST Clothing Classification (FNN)', fontsize=13, fontweight='bold')
+plt.xlabel('Predicted Clothing Label', fontsize=11)
+plt.ylabel('Actual Clothing Label', fontsize=11)
+plt.xticks(rotation=45, ha='right')
+plt.yticks(rotation=0)
+plt.tight_layout()
+plt.show()
+
+correct_total = np.trace(cm)
+incorrect_total = np.sum(cm) - correct_total
+
+print(f"Total Test Samples:           {len(y_test)}")
+print(f"Correctly Classified Samples: {correct_total} ({correct_total / len(y_test) * 100:.2f}%)")
+print(f"Misclassified Samples:        {incorrect_total} ({incorrect_total / len(y_test) * 100:.2f}%)\n")
+
+summary_rows = []
+for idx, item_name in enumerate(class_names):
+    total_samples = np.sum(cm[idx, :])
+    correct_count = cm[idx, idx]
+    incorrect_count = total_samples - correct_count
+    summary_rows.append({
+        'Class ID': idx,
+        'Clothing Item': item_name,
+        'Total Test Images': total_samples,
+        'Correctly Classified': correct_count,
+        'Incorrectly Classified': incorrect_count,
+        'Class Accuracy (%)': round((correct_count / total_samples) * 100, 2)
+    })
+
+summary_df = pd.DataFrame(summary_rows)
+display(summary_df)
+
+print("\nDetailed Classification Report:")
+print(classification_report(y_test, y_pred, target_names=class_names))
